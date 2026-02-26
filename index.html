@@ -1,171 +1,183 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <title>Double Scan QR</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  https://unpkg.com/html5-qrcode</script>
+  <title>Double Scan QR — Vérification rapide</title>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
   <style>
-    body { font-family: Arial, system-ui, sans-serif; text-align:center; padding:18px; }
-    h2 { margin:6px 0 2px; }
-    .sub { color:#666; font-size:13px; margin:0 0 10px; }
-    button { padding: 14px 22px; font-size: 18px; margin: 8px; border-radius:10px; border:1px solid #ddd; background:#fafafa; }
-    button:active { transform: scale(0.99); }
-    #reader { width: 340px; max-width: 92vw; margin:14px auto; display:none; }
-    #result { font-size: 22px; margin-top: 10px; min-height: 28px; }
-    #last { font-size: 13px; color:#777; margin-top:6px; min-height:18px; }
-    .hint { font-size:12px; color:#999; margin-top:8px; min-height:16px; }
+    :root{
+      --accent:#2563eb;
+    }
+    body{font-family: Arial, system-ui, sans-serif; text-align:center; padding:20px;}
+    h2{margin:0 0 6px}
+    .sub{color:#666; font-size:13px; margin:0 0 14px}
+    .row{display:flex; gap:10px; justify-content:center; flex-wrap:wrap}
+    button{padding:14px 20px; font-size:18px; border-radius:10px; border:1px solid #ddd; background:#fafafa;}
+    button:active{transform:scale(0.99)}
+    #reader{ width:340px; max-width:92vw; margin:14px auto; display:none; }
+    #result{ font-size:22px; margin-top:12px; min-height:28px; }
+    #last{ font-size:13px; color:#777; margin-top:8px; min-height:18px; }
+    #tips{ font-size:12px; color:#666; margin-top:10px }
+    select{ padding:8px; font-size:14px; border-radius:8px; border:1px solid #ddd; }
+    .ok{ color: #16a34a }
+    .err{ color: #dc2626 }
+    .muted{ color: #6b7280 }
   </style>
 </head>
 <body>
   <h2>Double Scan QR</h2>
-  <p class="sub">1) Document → 2) Colis → comparaison → réinitialisation auto</p>
+  <p class="sub">1) Scanner le document → 2) Scanner le colis → comparaison → réinitialisation automatique</p>
 
-  <button onclick="scanPapier()">Scanner QR Document</button>
-  <button onclick="scanColis()">Scanner QR Colis</button>
-  <button onclick="resetAll()" title="Réinitialiser manuellement">↺ Réinitialiser</button>
+  <div class="row" style="margin-bottom:8px">
+    <button id="btnDoc">📄 Scanner QR Document</button>
+    <button id="btnColis">📦 Scanner QR Colis</button>
+    <button id="btnReset" title="Réinitialiser manuellement">↺ Réinitialiser</button>
+  </div>
+
+  <div class="row" style="align-items:center; gap:6px">
+    <label for="cameraSelect" style="font-size:12px" aria-label="Sélection de la caméra">Caméra :</label>
+    <select id="cameraSelect"></select>
+  </div>
 
   <div id="reader"></div>
-
-  <div id="result"></div>
-  <div id="last"></div>
-  <div id="hint" class="hint"></div>
+  <div id="result" class="muted">Prêt pour un nouveau scan</div>
+  <div id="last">Doc: —  |  Colis: —</div>
+  <div id="tips">Astuce : ouvrez cette page en <b>HTTPS</b> et autorisez l’accès à la caméra. Sur iPhone : utilisez Safari.</div>
 
   <script>
     let qrPapier = "";
-    let qrColis  = "";
-    let autoResetDelayMs = 1800;
+    let qrColis = "";
     let resetting = false;
+    const autoResetDelayMs = 1800;
 
-    let html5QrCode = null;
+    const readerEl = document.getElementById('reader');
+    const resultEl = document.getElementById('result');
+    const lastEl = document.getElementById('last');
+    const cameraSelect = document.getElementById('cameraSelect');
 
-    // Petit rappel pour iOS/HTTPS/permissions
-    (function showHints(){
-      const hint = document.getElementById('hint');
-      const isHttps = location.protocol === 'https:';
-      if (!isHttps) {
-        hint.textContent = "Astuce : utilisez une URL HTTPS (GitHub Pages est OK) pour autoriser la caméra.";
-      }
-      if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
-        hint.textContent = "Sur iPhone : (1) lien HTTPS, (2) Safari hors navigation privée, (3) Autoriser Caméra pour ce site.";
-      }
-    })();
+    const html5QrCode = new Html5Qrcode('reader', { verbose: false });
+    let currentCameraId = null;
+    let isScanning = false;
 
-    async function strongStart(readerEl, onText) {
-      // Essaye d'abord avec un deviceId de caméra arrière si dispo, sinon fallback en facingMode.
-      // 1) Tente d'énumérer les caméras (déclenche souvent la permission)
-      let cameraConfig = null;
-      try {
+    async function populateCameras(){
+      try{
         const devices = await Html5Qrcode.getCameras();
-        if (devices && devices.length) {
-          // Choisit une caméra avec label "back" si possible, sinon la dernière (souvent la back sur mobile)
-          const back = devices.find(d => /back|rear|arrière/i.test(d.label));
-          const chosen = back || devices[devices.length - 1];
-          cameraConfig = { deviceId: { exact: chosen.id } };
+        cameraSelect.innerHTML = '';
+        devices.forEach((d, i)=>{
+          const opt = document.createElement('option');
+          opt.value = d.id;
+          opt.textContent = d.label || `Caméra ${i+1}`;
+          cameraSelect.appendChild(opt);
+        });
+        if(devices.length){
+          const back = devices.find(d => /back|arrière|rear|environment/i.test(d.label));
+          cameraSelect.value = (back?.id) || devices[0].id;
+          currentCameraId = cameraSelect.value;
         }
-      } catch(e) {
-        // Pas grave, on tombera sur facingMode
-      }
-
-      // 2) Crée/Relance le lecteur
-      if (html5QrCode) {
-        try { await html5QrCode.stop(); } catch(_) {}
-      }
-      html5QrCode = new Html5Qrcode('reader');
-
-      // 3) Démarre avec config choisie, sinon fallback environment
-      const cfg = { fps: 10, qrbox: 260 };
-      const videoConfig = cameraConfig || { facingMode: "environment" };
-
-      await html5QrCode.start(
-        videoConfig,
-        cfg,
-        async (decodedText) => {
-          try { await html5QrCode.stop(); } catch(_) {}
-          readerEl.style.display = 'none';
-          onText(decodedText.trim());
-        },
-        (_err) => { /* on ignore les erreurs de frames */ }
-      );
-    }
-
-    async function startScanner(callback) {
-      const readerEl = document.getElementById('reader');
-      readerEl.style.display = 'block';
-
-      try {
-        await strongStart(readerEl, callback);
-      } catch (e) {
-        readerEl.style.display = 'none';
-        alert("Impossible d'accéder à la caméra.\n• Vérifie que le site est en HTTPS\n• Autorise la caméra pour ce site\n• Sur iPhone, quitte la navigation privée.");
+      }catch(e){
+        console.warn('Impossible de lister les caméras', e);
       }
     }
 
-    function scanPapier() {
-      if (resetting) return;
-      startScanner((text) => {
-        qrPapier = normalize(text);
-        showLast();
-        checkMatch();
-      });
+    cameraSelect.addEventListener('change', ()=>{
+      currentCameraId = cameraSelect.value;
+      if(isScanning){
+        stopScanner();
+        startScanner(lastScanCallback);
+      }
+    });
+
+    function normalize(s){
+      if(!s) return '';
+      return s.replace(/\s+/g,'').replace(/[\\\/|]/g,'-').toUpperCase();
     }
 
-    function scanColis() {
-      if (resetting) return;
-      startScanner((text) => {
-        qrColis = normalize(text);
-        showLast();
-        checkMatch();
-      });
+    function showLast(){
+      const p = qrPapier ? ('Doc: '+qrPapier) : 'Doc: —';
+      const c = qrColis ? ('Colis: '+qrColis) : 'Colis: —';
+      lastEl.textContent = p + '  |  ' + c;
     }
 
-    function normalize(s) {
-      return s.replace(/\s+/g,'').replace(/[\/\\]/g,'-').toUpperCase();
+    function setStatus(text, cls){
+      resultEl.textContent = text;
+      resultEl.className = cls || 'muted';
     }
 
-    function checkMatch() {
-      const res = document.getElementById('result');
-      if (!qrPapier || !qrColis) {
-        res.textContent = "Scanne les deux QR";
-        res.style.color = "gray";
+    function checkMatch(){
+      if(!qrPapier || !qrColis){
+        setStatus('Scanne les deux QR', 'muted');
         return;
       }
-      if (qrPapier === qrColis) {
-        res.textContent = "🟢 OK — Identiques";
-        res.style.color = "green";
-      } else {
-        res.textContent = "🔴 Erreur — Différents";
-        res.style.color = "red";
+      if(qrPapier === qrColis){
+        setStatus('🟢 OK — Identiques', 'ok');
+      }else{
+        setStatus('🔴 Erreur — Différents', 'err');
       }
       scheduleAutoReset();
     }
 
     function scheduleAutoReset(){
       resetting = true;
-      setTimeout(()=>{
-        resetAll();
-        resetting = false;
-      }, autoResetDelayMs);
+      setTimeout(()=>{ resetAll(); resetting = false; }, autoResetDelayMs);
     }
 
     function resetAll(){
-      const res = document.getElementById('result');
       qrPapier = '';
-      qrColis  = '';
-      res.textContent = 'Prêt pour un nouveau scan';
-      res.style.color = 'gray';
+      qrColis = '';
       showLast();
+      setStatus('Prêt pour un nouveau scan', 'muted');
     }
 
-    function showLast(){
-      const last = document.getElementById('last');
-      const p = qrPapier ? ('Doc: ' + qrPapier) : 'Doc: —';
-      const c = qrColis ? ('Colis: ' + qrColis) : 'Colis: —';
-      last.textContent = p + '   |   ' + c;
+    let lastScanCallback = null;
+
+    async function startScanner(callback){
+      if(isScanning) return;
+      lastScanCallback = callback;
+      try{
+        readerEl.style.display = 'block';
+        isScanning = true;
+        const config = { fps: 10, qrbox: 260, aspectRatio: 1.7778 };
+        const cameraConfig = currentCameraId ? { deviceId: { exact: currentCameraId } } : { facingMode: { exact: 'environment' }};
+        await html5QrCode.start(cameraConfig, config, onScanSuccess, onScanError);
+      }catch(e){
+        readerEl.style.display = 'none';
+        isScanning = false;
+        const isInsecure = location.protocol !== 'https:' && location.hostname !== 'localhost';
+        const tip = isInsecure ? "\nAstuce : ouvrez le lien en HTTPS (ou en localhost)." : '';
+        alert("Impossible d'accéder à la caméra. Vérifiez les autorisations navigateur." + tip);
+      }
     }
 
-    // État initial
-    resetAll();
+    async function stopScanner(){
+      if(!isScanning) return;
+      try{ await html5QrCode.stop(); }catch(e){}
+      readerEl.style.display = 'none';
+      isScanning = false;
+    }
+
+    function onScanSuccess(decodedText){
+      stopScanner();
+      if(typeof lastScanCallback === 'function'){
+        lastScanCallback(decodedText.trim());
+      }
+    }
+    function onScanError(_err){}
+
+    document.getElementById('btnDoc').addEventListener('click', ()=>{
+      if(resetting) return;
+      startScanner((text)=>{ qrPapier = normalize(text); showLast(); checkMatch(); });
+    });
+    document.getElementById('btnColis').addEventListener('click', ()=>{
+      if(resetting) return;
+      startScanner((text)=>{ qrColis = normalize(text); showLast(); checkMatch(); });
+    });
+    document.getElementById('btnReset').addEventListener('click', resetAll);
+
+    (async () => {
+      await populateCameras();
+      resetAll();
+    })();
   </script>
 </body>
 </html>
