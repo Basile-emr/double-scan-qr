@@ -1,25 +1,25 @@
-
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset='UTF-8'>
+  <meta charset="UTF-8" />
   <title>Double Scan QR</title>
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  https://unpkg.com/html5-qrcode</script>
   <style>
-    body { font-family: Arial, system-ui, sans-serif; text-align: center; padding: 20px; }
-    h2 { margin-bottom: 6px; }
-    .sub { color:#666; font-size: 13px; margin-top:0 }
+    body { font-family: Arial, system-ui, sans-serif; text-align:center; padding:18px; }
+    h2 { margin:6px 0 2px; }
+    .sub { color:#666; font-size:13px; margin:0 0 10px; }
     button { padding: 14px 22px; font-size: 18px; margin: 8px; border-radius:10px; border:1px solid #ddd; background:#fafafa; }
     button:active { transform: scale(0.99); }
-    #reader { width: 320px; max-width: 90vw; margin:14px auto; display:none; }
-    #result { font-size: 22px; margin-top: 14px; min-height: 28px; }
-    #last { font-size: 13px; color:#777; margin-top:8px; min-height:18px; }
+    #reader { width: 340px; max-width: 92vw; margin:14px auto; display:none; }
+    #result { font-size: 22px; margin-top: 10px; min-height: 28px; }
+    #last { font-size: 13px; color:#777; margin-top:6px; min-height:18px; }
+    .hint { font-size:12px; color:#999; margin-top:8px; min-height:16px; }
   </style>
 </head>
 <body>
   <h2>Double Scan QR</h2>
-  <p class="sub">Scan 1) Document → 2) Colis → comparaison → réinitialisation automatique</p>
+  <p class="sub">1) Document → 2) Colis → comparaison → réinitialisation auto</p>
 
   <button onclick="scanPapier()">Scanner QR Document</button>
   <button onclick="scanColis()">Scanner QR Colis</button>
@@ -29,36 +29,76 @@
 
   <div id="result"></div>
   <div id="last"></div>
+  <div id="hint" class="hint"></div>
 
   <script>
     let qrPapier = "";
-    let qrColis = "";
-    let autoResetDelayMs = 1800; // délai de réinitialisation automatique après comparaison
+    let qrColis  = "";
+    let autoResetDelayMs = 1800;
     let resetting = false;
 
-    function startScanner(callback) {
+    let html5QrCode = null;
+
+    // Petit rappel pour iOS/HTTPS/permissions
+    (function showHints(){
+      const hint = document.getElementById('hint');
+      const isHttps = location.protocol === 'https:';
+      if (!isHttps) {
+        hint.textContent = "Astuce : utilisez une URL HTTPS (GitHub Pages est OK) pour autoriser la caméra.";
+      }
+      if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+        hint.textContent = "Sur iPhone : (1) lien HTTPS, (2) Safari hors navigation privée, (3) Autoriser Caméra pour ce site.";
+      }
+    })();
+
+    async function strongStart(readerEl, onText) {
+      // Essaye d'abord avec un deviceId de caméra arrière si dispo, sinon fallback en facingMode.
+      // 1) Tente d'énumérer les caméras (déclenche souvent la permission)
+      let cameraConfig = null;
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length) {
+          // Choisit une caméra avec label "back" si possible, sinon la dernière (souvent la back sur mobile)
+          const back = devices.find(d => /back|rear|arrière/i.test(d.label));
+          const chosen = back || devices[devices.length - 1];
+          cameraConfig = { deviceId: { exact: chosen.id } };
+        }
+      } catch(e) {
+        // Pas grave, on tombera sur facingMode
+      }
+
+      // 2) Crée/Relance le lecteur
+      if (html5QrCode) {
+        try { await html5QrCode.stop(); } catch(_) {}
+      }
+      html5QrCode = new Html5Qrcode('reader');
+
+      // 3) Démarre avec config choisie, sinon fallback environment
+      const cfg = { fps: 10, qrbox: 260 };
+      const videoConfig = cameraConfig || { facingMode: "environment" };
+
+      await html5QrCode.start(
+        videoConfig,
+        cfg,
+        async (decodedText) => {
+          try { await html5QrCode.stop(); } catch(_) {}
+          readerEl.style.display = 'none';
+          onText(decodedText.trim());
+        },
+        (_err) => { /* on ignore les erreurs de frames */ }
+      );
+    }
+
+    async function startScanner(callback) {
       const readerEl = document.getElementById('reader');
       readerEl.style.display = 'block';
-      const html5QrCode = new Html5Qrcode('reader');
-      html5QrCode.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: 260 },
-        (decodedText) => {
-          html5QrCode.stop().then(()=>{
-            readerEl.style.display = 'none';
-            callback(decodedText.trim());
-          }).catch(()=>{
-            readerEl.style.display = 'none';
-            callback(decodedText.trim());
-          });
-        },
-        (errorMsg) => {
-          // ignore scan errors (noisy stream)
-        }
-      ).catch((e)=>{
+
+      try {
+        await strongStart(readerEl, callback);
+      } catch (e) {
         readerEl.style.display = 'none';
-        alert('Impossible d'accéder à la caméra. Autorisez la caméra ou utilisez un lien HTTPS.');
-      });
+        alert("Impossible d'accéder à la caméra.\n• Vérifie que le site est en HTTPS\n• Autorise la caméra pour ce site\n• Sur iPhone, quitte la navigation privée.");
+      }
     }
 
     function scanPapier() {
@@ -80,24 +120,23 @@
     }
 
     function normalize(s) {
-      return s.replace(/\s+/g,'').replace(/[\/]/g,'-').toUpperCase();
+      return s.replace(/\s+/g,'').replace(/[\/\\]/g,'-').toUpperCase();
     }
 
     function checkMatch() {
       const res = document.getElementById('result');
       if (!qrPapier || !qrColis) {
-        res.textContent = 'Scanne les deux QR';
-        res.style.color = 'gray';
+        res.textContent = "Scanne les deux QR";
+        res.style.color = "gray";
         return;
       }
       if (qrPapier === qrColis) {
-        res.textContent = '🟢 OK — Identiques';
-        res.style.color = 'green';
+        res.textContent = "🟢 OK — Identiques";
+        res.style.color = "green";
       } else {
-        res.textContent = '🔴 Erreur — Différents';
-        res.style.color = 'red';
+        res.textContent = "🔴 Erreur — Différents";
+        res.style.color = "red";
       }
-      // Auto reset après affichage du résultat
       scheduleAutoReset();
     }
 
@@ -125,7 +164,7 @@
       last.textContent = p + '   |   ' + c;
     }
 
-    // état initial
+    // État initial
     resetAll();
   </script>
 </body>
